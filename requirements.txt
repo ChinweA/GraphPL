@@ -1,0 +1,6 @@
+pytest
+pydantic
+mypy
+black
+pylint
+
