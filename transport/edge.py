@@ -1,10 +1,13 @@
 """
-Edge — a directed connection between two nodes.
+Edge — a directed data channel between two nodes.
 
-An edge sits between the out-buffer of a source node and the in-buffer of a
-target node.  Calling transfer() drains every item currently sitting in the
-source's out-buffer and pushes each one into the target's in-buffer, so that
-the target can consume it on its next action cycle.
+An edge transfers items from the out-buffer of a source node into the
+in-buffer of a target node.  Transfer respects back-pressure: if the
+target's in-buffer is full, remaining items stay in the source's
+out-buffer so nothing is silently dropped.
+
+You can limit how many items move per transfer call with the
+``max_items`` parameter — useful for flow control on hot edges.
 """
 
 from __future__ import annotations
@@ -16,11 +19,11 @@ if TYPE_CHECKING:
 
 
 class Edge:
-    """A directed data channel from one node's output to another node's input.
+    """A directed data channel from one node's output to another's input.
 
     Args:
-        source: The node whose out-buffer will be drained.
-        target: The node whose in-buffer will receive the drained items.
+        source:    Node whose out-buffer is drained.
+        target:    Node whose in-buffer receives the data.
     """
 
     def __init__(self, source: "Node", target: "Node") -> None:
@@ -31,22 +34,24 @@ class Edge:
     # Data movement
     # ------------------------------------------------------------------
 
-    def transfer(self) -> int:
-        """Move all pending items from source → target.
+    def transfer(self, max_items: int = -1) -> int:
+        """Move pending items from source → target.
 
-        Drains the source node's out-buffer one item at a time and appends
-        each item to the target node's in-buffer.  If the target's in-buffer
-        is full, remaining items are left in the source's out-buffer so
-        nothing is silently dropped.
+        Args:
+            max_items: Maximum number of items to transfer in one call.
+                       ``-1`` (default) means unlimited — drain everything
+                       that fits.  Use a positive value for flow control
+                       (e.g. ``max_items=100`` for batch processing).
 
         Returns:
-            The number of items that were actually transferred.
+            The number of items actually transferred.
         """
         moved = 0
         while not self.source._out_buffer.is_empty():
             if self.target._in_buffer.is_full():
-                # Back-pressure: target can't accept more right now.
-                break
+                break   # back-pressure: leave items in source for next tick
+            if max_items != -1 and moved >= max_items:
+                break   # batch limit reached
             item = self.source._out_buffer.pop()
             self.target._in_buffer.append(item)
             moved += 1
